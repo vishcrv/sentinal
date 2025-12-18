@@ -60,6 +60,7 @@ def get_default_user_data() -> Dict:
         "last_activity": str(datetime.now()),
         "history": [],
         "mood_entries": [],
+        "conversation_moods": [],  # Track moods detected during conversation
         "profile": {
             "name": "",
             "preferences": {

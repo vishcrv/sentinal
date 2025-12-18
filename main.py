@@ -46,6 +46,7 @@ class ChatResponse(BaseModel):
     mood_detected: Optional[str] = None
     crisis_detected: bool = False
     suggestions: Optional[List[str]] = None
+    mood_stats: Optional[Dict] = None
 
 class MoodEntry(BaseModel):
     user_id: str
@@ -91,7 +92,8 @@ async def chat_endpoint(request: ChatRequest):
             "timestamp": str(datetime.now())
         })
         
-        # Generate response
+        # Generate response (this also analyzes and logs mood automatically)
+        # Note: user_data is modified in-place to track conversation_moods
         response_data = await chat.generate_support_response(
             user_data=user_data,
             user_message=request.message,
@@ -111,13 +113,17 @@ async def chat_endpoint(request: ChatRequest):
         # Save user data
         db.save_user_data(request.user_id, user_data)
         
-        # Return response
+        # Get conversation mood stats for active mood bar
+        mood_stats = chat.get_conversation_mood_stats(user_data)
+        
+        # Return response with mood stats
         return ChatResponse(
             response=response_data["response"],
             session_id=session_id,
             mood_detected=response_data.get("mood_detected"),
             crisis_detected=response_data.get("crisis_detected", False),
-            suggestions=response_data.get("suggestions")
+            suggestions=response_data.get("suggestions"),
+            mood_stats=mood_stats
         )
         
     except Exception as e:
@@ -153,6 +159,23 @@ async def clear_chat_history(user_id: str):
         db.save_user_data(user_id, user_data)
         
         return {"success": True, "message": "Chat history cleared"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/chat/mood-bar/{user_id}")
+async def get_active_mood_bar(user_id: str):
+    """
+    Get active mood bar data - current mood and conversation mood statistics
+    """
+    try:
+        user_data = db.load_user_data(user_id)
+        mood_stats = chat.get_conversation_mood_stats(user_data)
+        
+        return {
+            "user_id": user_id,
+            "mood_stats": mood_stats,
+            "timestamp": str(datetime.now())
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -324,7 +347,8 @@ async def websocket_chat(websocket: WebSocket, user_id: str):
                 "timestamp": str(datetime.now())
             })
             
-            # Generate response
+            # Generate response (this also analyzes and logs mood automatically)
+            # Note: user_data is modified in-place to track conversation_moods
             response_data = await chat.generate_support_response(
                 user_data=user_data,
                 user_message=message,
@@ -341,12 +365,16 @@ async def websocket_chat(websocket: WebSocket, user_id: str):
             # Save
             db.save_user_data(user_id, user_data)
             
+            # Get conversation mood stats
+            mood_stats = chat.get_conversation_mood_stats(user_data)
+            
             # Send response
             await websocket.send_json({
                 "response": response_data["response"],
                 "mood_detected": response_data.get("mood_detected"),
                 "crisis_detected": response_data.get("crisis_detected", False),
-                "suggestions": response_data.get("suggestions")
+                "suggestions": response_data.get("suggestions"),
+                "mood_stats": mood_stats
             })
             
     except WebSocketDisconnect:
