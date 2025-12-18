@@ -17,7 +17,8 @@ A compassionate AI-powered mental health support chatbot with mood tracking, wel
 ### 1. Install Dependencies
 
 ```bash
-pip install -r requirements.txt
+# Note: this repo uses `requirments.txt` (typo kept for compatibility).
+pip install -r requirments.txt
 ```
 
 ### 2. Set Up Environment Variables
@@ -31,6 +32,9 @@ cp .env.example .env
 Edit `.env`:
 ```
 OPENAI_API_KEY=sk-your-actual-api-key-here
+# Optional Spotify app credentials for recommendations (Client Credentials flow)
+SPOTIFY_CLIENT_ID=your_spotify_client_id
+SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
 ```
 
 ### 3. Run the Server
@@ -45,111 +49,112 @@ The server will start at `http://localhost:8000`
 
 Visit `http://localhost:8000/docs` for interactive API documentation.
 
-## API Endpoints
+## API Reference (detailed)
 
-### Chat Endpoints
+This section documents each endpoint implemented in `main.py`. Use the interactive Swagger UI at `http://localhost:8000/docs` for live testing.
 
-#### POST `/api/chat`
-Send a message and get a response.
+1) POST /api/chat
+- Purpose: Primary chat endpoint. Send a user message and receive the bot reply plus mood/crisis signals.
+- Request JSON:
+  - `user_id` (string) — required
+  - `message` (string) — required
+  - `session_id` (string) — optional
+- Response JSON (ChatResponse):
+  - `response` (string)
+  - `session_id` (string)
+  - `mood_detected` (string|null)
+  - `mood_intensity` (int|null)
+  - `crisis_detected` (bool)
+  - `suggestions` (array|null)
 
-**Request:**
+Example request:
 ```json
-{
-  "user_id": "user123",
-  "message": "I'm feeling anxious today",
-  "session_id": "optional-session-id"
-}
+{ "user_id": "user123", "message": "I'm feeling anxious today" }
 ```
 
-**Response:**
+2) GET /api/chat/history/{user_id}
+- Purpose: Return the user's recent chat history (default limit 50).
+- Query param: `limit` (int, optional)
+- Response:
 ```json
-{
-  "response": "im sorry ur feeling anxious. wanna talk about whats making u feel that way?",
-  "session_id": "abc-123",
-  "mood_detected": "anxious",
-  "crisis_detected": false,
-  "suggestions": [
-    "Try a 5-minute breathing exercise",
-    "Go for a short walk outside"
-  ]
-}
+{ "user_id": "user123", "history": [ {"role":"user","text":"...","timestamp":"..."}, ... ], "total_messages": 12 }
 ```
 
-#### GET `/api/chat/history/{user_id}`
-Get chat history for a user.
+3) DELETE /api/chat/history/{user_id}
+- Purpose: Clear a user's chat history and current session moods.
+- Response: `{ "success": true, "message": "Chat history cleared" }`
 
-#### DELETE `/api/chat/history/{user_id}`
-Clear chat history.
+4) WebSocket /ws/chat/{user_id}
+- Purpose: Real-time chat. Send JSON `{ "message": "..." }` and receive JSON:
+  - `{ "response", "mood_detected", "mood_intensity", "crisis_detected", "suggestions" }`
 
-### Mood Tracking Endpoints
+5) POST /api/mood/log
+- Purpose: Manually log a mood entry.
+- Request JSON:
+  - `user_id` (string)
+  - `mood` (string)
+  - `intensity` (int, 1-10)
+  - `notes` (string, optional)
+  - `triggers` (array[string], optional)
+- Response JSON:
+  - `{ success: true, entry_id: "<uuid>", insights: {...} }`
 
-#### POST `/api/mood/log`
-Log a mood entry.
+6) GET /api/mood/history/{user_id}
+- Purpose: Return persisted mood entries (default last 30 days).
+- Query param: `days` (int)
+- Response: `{ user_id, history: [...], insights: {...} }`
 
-**Request:**
+7) GET /api/mood/insights/{user_id}
+- Purpose: Compute mood insights (most common mood, average intensity, trend, time patterns).
+- Response: insights JSON (see `mood_tracker.get_mood_insights`).
+
+8) GET /api/mood/active/{user_id}
+- Purpose: Active mood summary for live UI (mood bar): `average_intensity`, `distribution`, `timeline`.
+- Query param: `limit` (int)
+- Response example:
 ```json
-{
-  "user_id": "user123",
-  "mood": "anxious",
-  "intensity": 7,
-  "notes": "Work deadline stress",
-  "triggers": ["work", "deadline"]
-}
+{ "user_id":"user123","average_intensity":6.2,"distribution":{"anxious":3,"calm":2},"timeline":[ ... ] }
 ```
 
-#### GET `/api/mood/history/{user_id}`
-Get mood history (default: last 30 days).
+9) GET /api/mood/transitions/{user_id}
+- Purpose: Return fine-grained mood transitions captured during conversations.
+- Response: `{ user_id, transitions:[{id,mood,intensity,message,context,timestamp}], total }`
 
-#### GET `/api/mood/insights/{user_id}`
-Get mood insights and patterns.
+10) GET /api/mood/session/{user_id}
+- Purpose: Session summary for the last N minutes (default 60). Returns transitions and session statistics.
+- Query param: `minutes` (int)
 
-### Wellness Endpoints
+11) GET /api/mood/current/{user_id}
+- Purpose: Payload for active mood bar UI. Returns current mood, current intensity, average intensity, mood_distribution, recent_transitions, session_transitions_count.
 
-#### POST `/api/wellness/recommendations`
-Get personalized wellness recommendations.
+12) POST /api/wellness/recommendations
+- Purpose: Get wellness suggestions (breathing, journaling, physical activities).
+- Request JSON: `{ user_id: string, category?: string }`
+- Response: `{ user_id, recommendations: [...] }`
 
-**Request:**
-```json
-{
-  "user_id": "user123",
-  "category": "breathing"
-}
-```
+13) GET /api/wellness/activities
+- Purpose: Return available wellness activities.
 
-Categories: `breathing`, `meditation`, `physical`, `journaling`, `grounding`, `social`, `creative`
+14) POST /api/user/profile
+- Purpose: Create/update user profile and preferences.
+- Request JSON: `{ user_id, name?:string, preferences?:{ communication_style?: 'supportive'|'casual'|'playful', ... } }`
+- Response: `{ success: true, profile: {...} }`
 
-#### GET `/api/wellness/activities`
-Get all available wellness activities.
+15) GET /api/user/profile/{user_id}
+- Purpose: Return user profile and lightweight stats: total messages, mood entries, days_active.
 
-### User Profile Endpoints
+16) POST /api/spotify/recommend
+- Purpose: Provide Spotify track recommendations. Two modes:
+  - `mode=auto` (default) — recommend by most recent mood / mood insights.
+  - `mode=search` — requires `query` field to search tracks.
+- Request JSON: `{ user_id: string, mode?: 'auto'|'search', query?: string }`
+- Response (auto): `{ mood: "<mood>", tracks: [ {id,name,artists,preview_url,external_url}, ... ] }`
+- Response (search): `{ tracks: [...] }`
 
-#### POST `/api/user/profile`
-Update user profile and preferences.
+Notes:
+- Crisis detection is surfaced as `crisis_detected: true` on chat responses when triggered.
+- The chat engine uses an LLM with prompts tuned to produce a human, friend-like tone; the stored `profile.preferences.communication_style` may affect tone.
 
-#### GET `/api/user/profile/{user_id}`
-Get user profile and statistics.
-
-### WebSocket
-
-#### WS `/ws/chat/{user_id}`
-Real-time chat via WebSocket.
-
-**Send:**
-```json
-{
-  "message": "I need someone to talk to"
-}
-```
-
-**Receive:**
-```json
-{
-  "response": "im here for u. whats going on?",
-  "mood_detected": null,
-  "crisis_detected": false,
-  "suggestions": null
-}
-```
 
 ## Example Frontend Integration
 
@@ -239,11 +244,12 @@ ws.send(JSON.stringify({
 mental-health-chatbot/
 ├── main.py                 # FastAPI server and endpoints
 ├── chatbot_engine.py       # AI chat logic and response generation
+├── spotify_integration.py  # Spotify helper: app-token search & mood recommendations
 ├── database.py             # Database operations
 ├── mood_tracker.py         # Mood logging and insights
 ├── wellness.py             # Wellness recommendations
 ├── config.py               # Configuration settings
-├── requirements.txt        # Python dependencies
+├── requirments.txt         # Python dependencies (note filename)
 ├── .env.example           # Example environment variables
 ├── README.md              # This file
 └── mental_health.db       # SQLite database (auto-created)
@@ -258,6 +264,11 @@ Edit `config.py` to customize:
 - CORS origins
 - Crisis resources
 - Feature flags
+
+Add optional Spotify configuration in `.env` or environment:
+
+- `SPOTIFY_CLIENT_ID` — Spotify application client id
+- `SPOTIFY_CLIENT_SECRET` — Spotify application client secret
 
 ## Crisis Support Resources
 
@@ -311,6 +322,29 @@ curl -X POST "http://localhost:8000/api/mood/log" \
 curl -X POST "http://localhost:8000/api/wellness/recommendations" \
   -H "Content-Type: application/json" \
   -d '{"user_id": "test123", "category": "breathing"}'
+```
+
+### Spotify recommendations
+
+The backend exposes `/api/spotify/recommend`:
+
+- `mode=auto` (default) — recommends tracks using the most recent detected mood for the user.
+- `mode=search` — pass `query` to search tracks.
+
+Example (auto):
+
+```bash
+curl -X POST "http://localhost:8000/api/spotify/recommend" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"test123","mode":"auto"}'
+```
+
+Example (search):
+
+```bash
+curl -X POST "http://localhost:8000/api/spotify/recommend" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"test123","mode":"search","query":"lofi chill"}'
 ```
 
 ## Customization

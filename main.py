@@ -15,6 +15,8 @@ import database as db
 import chatbot_engine as chat
 import mood_tracker as mood
 import wellness as well
+import spotify_integration as sp
+import asyncio
 
 # Initialize FastAPI
 app = FastAPI(title="Mental Health Support API", version="1.0.0")
@@ -22,7 +24,7 @@ app = FastAPI(title="Mental Health Support API", version="1.0.0")
 # CORS - Allow frontend to connect
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your frontend domain
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -44,13 +46,14 @@ class ChatResponse(BaseModel):
     response: str
     session_id: str
     mood_detected: Optional[str] = None
+    mood_intensity: Optional[int] = None
     crisis_detected: bool = False
     suggestions: Optional[List[str]] = None
 
 class MoodEntry(BaseModel):
     user_id: str
-    mood: str  # happy, sad, anxious, stressed, angry, calm, etc.
-    intensity: int  # 1-10
+    mood: str
+    intensity: int
     notes: Optional[str] = None
     triggers: Optional[List[str]] = None
 
@@ -66,7 +69,7 @@ class UserProfileRequest(BaseModel):
 
 class WellnessRequest(BaseModel):
     user_id: str
-    category: Optional[str] = None  # breathing, meditation, activity, journaling
+    category: Optional[str] = None
 
 # ══════════════════════════════════════════════════════════════
 # CHAT ENDPOINTS
@@ -91,7 +94,7 @@ async def chat_endpoint(request: ChatRequest):
             "timestamp": str(datetime.now())
         })
         
-        # Generate response
+        # Generate response with mood tracking
         response_data = await chat.generate_support_response(
             user_data=user_data,
             user_message=request.message,
@@ -105,6 +108,14 @@ async def chat_endpoint(request: ChatRequest):
             "timestamp": str(datetime.now())
         })
         
+        # Track mood in session if detected
+        if response_data.get("mood_detected"):
+            user_data.setdefault("current_session_moods", []).append({
+                "mood": response_data.get("mood_detected"),
+                "intensity": response_data.get("mood_intensity"),
+                "timestamp": str(datetime.now())
+            })
+        
         # Update last activity
         user_data["last_activity"] = str(datetime.now())
         
@@ -116,6 +127,7 @@ async def chat_endpoint(request: ChatRequest):
             response=response_data["response"],
             session_id=session_id,
             mood_detected=response_data.get("mood_detected"),
+            mood_intensity=response_data.get("mood_intensity"),
             crisis_detected=response_data.get("crisis_detected", False),
             suggestions=response_data.get("suggestions")
         )
@@ -133,7 +145,6 @@ async def get_chat_history(user_id: str, limit: int = 50):
         user_data = db.load_user_data(user_id)
         history = user_data.get("history", [])
         
-        # Return last N messages
         return {
             "user_id": user_id,
             "history": history[-limit:] if len(history) > limit else history,
@@ -150,6 +161,7 @@ async def clear_chat_history(user_id: str):
     try:
         user_data = db.load_user_data(user_id)
         user_data["history"] = []
+        user_data["current_session_moods"] = []
         db.save_user_data(user_id, user_data)
         
         return {"success": True, "message": "Chat history cleared"}
@@ -174,7 +186,6 @@ async def log_mood(entry: MoodEntry):
             triggers=entry.triggers
         )
         
-        # Get insights if user has enough data
         insights = mood.get_mood_insights(entry.user_id)
         
         return MoodResponse(
@@ -210,6 +221,124 @@ async def get_insights(user_id: str):
     try:
         insights = mood.get_mood_insights(user_id)
         return insights
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/mood/active/{user_id}")
+async def get_active_mood(user_id: str, limit: int = 20):
+    """Return recent mood timeline and an active mood bar summary"""
+    try:
+        entries = db.get_mood_entries(user_id, limit=limit)
+
+        if not entries:
+            return {
+                "user_id": user_id,
+                "average_intensity": None,
+                "distribution": {},
+                "timeline": []
+            }
+
+        avg_intensity = round(sum(e.get("intensity", 0) for e in entries) / max(1, len(entries)), 1)
+        dist = {}
+        for e in entries:
+            dist[e["mood"]] = dist.get(e["mood"], 0) + 1
+
+        return {
+            "user_id": user_id,
+            "average_intensity": avg_intensity,
+            "distribution": dist,
+            "timeline": entries
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# NEW ENDPOINTS FOR MOOD TRANSITIONS
+
+@app.get("/api/mood/transitions/{user_id}")
+async def get_mood_transitions(user_id: str, limit: int = 50):
+    """
+    Get mood transitions during conversations
+    """
+    try:
+        transitions = db.get_mood_transitions(user_id, limit=limit)
+        
+        return {
+            "user_id": user_id,
+            "transitions": transitions,
+            "total": len(transitions)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/mood/session/{user_id}")
+async def get_session_mood(user_id: str, minutes: int = 60):
+    """
+    Get current session mood summary (last N minutes)
+    """
+    try:
+        summary = db.get_session_mood_summary(user_id, minutes=minutes)
+        
+        return summary
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/mood/current/{user_id}")
+async def get_current_mood_bar(user_id: str):
+    """
+    Get data for active mood bar visualization
+    Returns: current mood, intensity, recent transitions
+    """
+    try:
+        # Get session summary (last hour)
+        summary = db.get_session_mood_summary(user_id, minutes=60)
+        
+        # Get last 10 transitions for visualization
+        recent_transitions = db.get_mood_transitions(user_id, limit=10)
+        
+        return {
+            "user_id": user_id,
+            "current_mood": summary.get("current_mood"),
+            "current_intensity": summary.get("current_intensity"),
+            "average_intensity": summary.get("average_intensity"),
+            "mood_distribution": summary.get("mood_distribution", {}),
+            "recent_transitions": recent_transitions[::-1],  # Chronological order
+            "session_transitions_count": summary.get("total_transitions", 0)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class SpotifyRequest(BaseModel):
+    user_id: str
+    mode: Optional[str] = "auto"
+    query: Optional[str] = None
+
+@app.post("/api/spotify/recommend")
+async def spotify_recommend(req: SpotifyRequest):
+    """Recommend songs via Spotify based on current mood or search query"""
+    try:
+        user_data = db.load_user_data(req.user_id)
+
+        if req.mode == "search" and req.query:
+            tracks = await sp.search_tracks(req.query)
+            return {"tracks": tracks}
+
+        # Get most recent mood
+        transitions = db.get_mood_transitions(req.user_id, limit=1)
+        mood_val = transitions[0]["mood"] if transitions else None
+
+        if not mood_val:
+            entries = db.get_mood_entries(req.user_id, limit=20)
+            mood_val = entries[0].get("mood") if entries else None
+
+        if not mood_val:
+            insights = mood.get_mood_insights(req.user_id)
+            mood_val = insights.get("most_common_mood", {}).get("mood") if isinstance(insights, dict) else None
+
+        if not mood_val:
+            mood_val = "calm"
+
+        tracks = await sp.recommend_for_mood(mood_val)
+        return {"mood": mood_val, "tracks": tracks}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -294,7 +423,7 @@ async def get_user_profile(user_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 # ══════════════════════════════════════════════════════════════
-# WEBSOCKET FOR REAL-TIME CHAT (OPTIONAL)
+# WEBSOCKET FOR REAL-TIME CHAT
 # ══════════════════════════════════════════════════════════════
 
 @app.websocket("/ws/chat/{user_id}")
@@ -307,44 +436,38 @@ async def websocket_chat(websocket: WebSocket, user_id: str):
     
     try:
         while True:
-            # Receive message
             data = await websocket.receive_json()
             message = data.get("message", "")
             
             if not message:
                 continue
             
-            # Load user data
             user_data = db.load_user_data(user_id)
             
-            # Add user message
             user_data["history"].append({
                 "role": "user",
                 "text": message,
                 "timestamp": str(datetime.now())
             })
             
-            # Generate response
             response_data = await chat.generate_support_response(
                 user_data=user_data,
                 user_message=message,
                 user_id=user_id
             )
             
-            # Add bot response
             user_data["history"].append({
                 "role": "assistant",
                 "text": response_data["response"],
                 "timestamp": str(datetime.now())
             })
             
-            # Save
             db.save_user_data(user_id, user_data)
             
-            # Send response
             await websocket.send_json({
                 "response": response_data["response"],
                 "mood_detected": response_data.get("mood_detected"),
+                "mood_intensity": response_data.get("mood_intensity"),
                 "crisis_detected": response_data.get("crisis_detected", False),
                 "suggestions": response_data.get("suggestions")
             })
@@ -384,5 +507,5 @@ if __name__ == "__main__":
         "main:app",
         host="0.0.0.0",
         port=8000,
-        reload=True  # Auto-reload on code changes
+        reload=True
     )
