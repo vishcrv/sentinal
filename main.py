@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 
 MODEL_NAME = "openai/gpt-oss-20b:groq"
 
-logger.info(f"HF_API_KEY: {HF_API_KEY}")
 llm = ChatOpenAI(
     model=MODEL_NAME,
     openai_api_key=HF_API_KEY,
@@ -29,8 +28,11 @@ llm = ChatOpenAI(
 def generate_text(text) -> str:
     res_bert = predict_emotions(text)
     logger.info(f"Detected Emotions: {res_bert}")
+
     prompt = f"""### ROLE & OBJECTIVE
-        You are a compassionate, non-judgmental mental health support assistant. Your goal is to provide emotional support, validate the user's feelings, and offer gentle coping strategies. You are NOT a doctor and cannot provide medical diagnoses.
+        You are a compassionate, non-judgmental mental health support assistant. 
+        Your goal is to provide emotional support, validate the user's feelings, and offer gentle coping strategies.
+        You are NOT a doctor and cannot provide medical diagnoses.
 
         ### INPUT CONTEXT
         - User Input: "{text}"
@@ -47,12 +49,14 @@ def generate_text(text) -> str:
 
         ### RESPONSE STRUCTURE
         [Validation of Emotion] + [Supportive Statement] + [Gentle Question or Coping Suggestion]"""
-    logger.info(f"Prompt: {prompt}")
+
     messages = [SystemMessage(content=prompt)]
     response = llm.invoke(messages)
     return response
 
 
 if __name__ == "__main__":
-    answer = generate_text("i wanna kill myself")
+    answer = generate_text(
+        "I am feeling very sad that i scored less marks in my Fat exam."
+    )
     logger.info(f"answer:{answer.content}")

@@ -77,14 +77,3 @@ def predict_emotions(text, threshold=0.5):
         "detected_emotions": detected_emotions if detected_emotions else ["neutral"],
         "emotion_scores": emotion_scores,
     }
-
-
-# # Example usage
-# text = "i wanna fcking die"
-# result = predict_emotions(text)
-
-# print(f"Text: {result['text']}")
-# print(f"Detected Emotions: {', '.join(result['detected_emotions'])}")
-# print("\nEmotion Scores:")
-# for emotion, score in result["emotion_scores"].items():
-#     print(f"  {emotion}: {score:.4f} ({score * 100:.2f}%)")
