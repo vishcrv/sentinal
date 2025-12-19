@@ -270,6 +270,9 @@ Add optional Spotify configuration in `.env` or environment:
 - `SPOTIFY_CLIENT_ID` — Spotify application client id
 - `SPOTIFY_CLIENT_SECRET` — Spotify application client secret
 
+Add google console creds
+-downlaod the cred as json and paste in a folder called ".cred/" and rename it as "setup_cred.json"
+
 ## Crisis Support Resources
 
 The bot includes crisis detection and will provide appropriate resources:

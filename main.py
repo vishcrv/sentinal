@@ -10,12 +10,12 @@ from typing import Optional, List, Dict
 import uvicorn
 from datetime import datetime
 import uuid
-
 import database as db
 import chatbot_engine as chat
 import mood_tracker as mood
 import wellness as well
 import spotify_integration as sp
+import calendar_integration as cal
 import asyncio
 
 # Initialize FastAPI
@@ -404,6 +404,138 @@ async def get_wellness_activities():
     try:
         activities = well.get_all_activities()
         return {"activities": activities}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ══════════════════════════════════════════════════════════════
+# CALENDAR EVENTS
+# ══════════════════════════════════════════════════════════════
+
+class CalendarEventRequest(BaseModel):
+    user_id: str
+    title: str
+    description: Optional[str] = None
+    start_time: str  # ISO format datetime string
+    duration_minutes: int = 30
+    category: Optional[str] = None
+    source: Optional[str] = None  # "suggestion" or "wellness"
+
+@app.post("/api/calendar/create")
+async def create_calendar_event(request: CalendarEventRequest):
+    """
+    Create a calendar event from suggestion or wellness activity
+    """
+    try:
+        from datetime import timedelta
+        import uuid
+        
+        # Parse start time
+        start_dt = datetime.fromisoformat(request.start_time.replace("Z", "+00:00"))
+        end_dt = start_dt + timedelta(minutes=request.duration_minutes)
+        
+        # Determine event type from title/category
+        event_type = request.category or cal.extract_event_type(request.title)
+        
+        # Create event in Google Calendar using the provided title
+        # We'll use create_event directly to have more control
+        from tools.calendar_tools import create_event as create_google_event
+        
+        end_dt = start_dt + timedelta(minutes=request.duration_minutes)
+        
+        google_result = create_google_event(
+            summary=request.title,
+            start_time=start_dt.isoformat(),
+            end_time=end_dt.isoformat(),
+            description=request.description or request.title,
+            calendar_id="primary",
+            reminders=[{"method": "popup", "minutes": 15}],
+            use_default_reminders=False,
+        )
+        
+        # Parse result to try to get event ID (though it's not in the JSON response)
+        import json
+        google_event_id = None
+        try:
+            result_data = json.loads(google_result) if isinstance(google_result, str) else google_result
+            # The create_event doesn't return event ID, but we can try to extract from message
+        except:
+            pass
+        
+        result = {"success": True, "result": google_result, "google_event_id": google_event_id}
+        
+        if not result.get("success"):
+            raise HTTPException(status_code=500, detail=result.get("error", "Failed to create calendar event"))
+        
+        # Extract Google event ID from result
+        google_event_id = result.get("google_event_id")
+        
+        # Generate local event ID
+        event_id = str(uuid.uuid4())
+        
+        # Save to database
+        db.save_calendar_event(
+            user_id=request.user_id,
+            event_id=event_id,
+            google_event_id=google_event_id,
+            title=request.title,
+            description=request.description,
+            start_time=start_dt.isoformat(),
+            end_time=end_dt.isoformat(),
+            category=request.category or event_type,
+            source=request.source or "wellness"
+        )
+        
+        return {
+            "success": True,
+            "event_id": event_id,
+            "title": request.title,
+            "start_time": start_dt.isoformat(),
+            "end_time": end_dt.isoformat(),
+            "message": result.get("result", "")
+        }
+        
+    except Exception as e:
+        print(f"❌ Calendar event creation error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/calendar/events/{user_id}")
+async def get_calendar_events(user_id: str, days_ahead: int = 30):
+    """
+    Get calendar events for a user
+    """
+    try:
+        events = db.get_calendar_events(user_id, days_ahead=days_ahead)
+        return {
+            "user_id": user_id,
+            "events": events,
+            "count": len(events)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/calendar/events/{user_id}/{event_id}")
+async def delete_calendar_event(user_id: str, event_id: str):
+    """
+    Delete a calendar event
+    """
+    try:
+        # Get event to find Google event ID
+        events = db.get_calendar_events(user_id, limit=1000)
+        event = next((e for e in events if e["id"] == event_id), None)
+        
+        if event and event.get("google_event_id"):
+            # Delete from Google Calendar
+            # Note: calendar_integration uses calendar_tools internally
+            # We'll handle deletion through the calendar integration if needed
+            pass
+        
+        # Delete from database
+        success = db.delete_calendar_event(user_id, event_id)
+        
+        return {
+            "success": success,
+            "message": "Event deleted" if success else "Event not found"
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
