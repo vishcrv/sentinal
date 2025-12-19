@@ -42,7 +42,7 @@ def init_db():
         )
     """)
     
-    # Mood transitions table - NEW TABLE for continuous mood tracking
+    # Mood transitions table - for continuous mood tracking
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS mood_transitions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,6 +56,49 @@ def init_db():
         )
     """)
     
+    # Daily summaries table - NEW
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS daily_summaries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            date TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            message_count INTEGER NOT NULL,
+            generated_at TEXT NOT NULL,
+            UNIQUE(user_id, date),
+            FOREIGN KEY (user_id) REFERENCES users (user_id)
+        )
+    """)
+    
+    # Weekly summaries table - NEW
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS weekly_summaries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            week_key TEXT NOT NULL,
+            week_start TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            days_count INTEGER NOT NULL,
+            generated_at TEXT NOT NULL,
+            UNIQUE(user_id, week_key),
+            FOREIGN KEY (user_id) REFERENCES users (user_id)
+        )
+    """)
+    
+    # Monthly summaries table - NEW
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS monthly_summaries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            month_key TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            weeks_count INTEGER NOT NULL,
+            generated_at TEXT NOT NULL,
+            UNIQUE(user_id, month_key),
+            FOREIGN KEY (user_id) REFERENCES users (user_id)
+        )
+    """)
+    
     # Create indexes
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_user_mood 
@@ -65,6 +108,21 @@ def init_db():
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_user_transitions 
         ON mood_transitions(user_id, timestamp)
+    """)
+    
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_daily_summaries 
+        ON daily_summaries(user_id, date)
+    """)
+    
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_weekly_summaries 
+        ON weekly_summaries(user_id, week_key)
+    """)
+    
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_monthly_summaries 
+        ON monthly_summaries(user_id, month_key)
     """)
     
     conn.commit()
@@ -331,13 +389,198 @@ def clear_old_transitions(user_id: str, hours: int = 24):
     print(f"🧹 Cleared {deleted} old mood transitions for user {user_id}")
     return deleted
 
+# ══════════════════════════════════════════════════════════════
+# SUMMARY STORAGE FUNCTIONS - NEW
+# ══════════════════════════════════════════════════════════════
+
+def save_daily_summary(user_id: str, date: str, summary: str, message_count: int):
+    """Save or update a daily summary"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        INSERT OR REPLACE INTO daily_summaries 
+        (user_id, date, summary, message_count, generated_at)
+        VALUES (?, ?, ?, ?, ?)
+    """, (
+        user_id,
+        date,
+        summary,
+        message_count,
+        str(datetime.now())
+    ))
+    
+    conn.commit()
+    conn.close()
+    print(f"📝 Daily summary saved for {user_id} on {date}")
+
+def get_daily_summaries(user_id: str, limit: int = 30) -> Dict[str, Dict]:
+    """Get daily summaries for a user (returns dict keyed by date)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT date, summary, message_count, generated_at
+        FROM daily_summaries
+        WHERE user_id = ?
+        ORDER BY date DESC
+        LIMIT ?
+    """, (user_id, limit))
+    
+    summaries = {}
+    for row in cursor.fetchall():
+        summaries[row[0]] = {
+            "summary": row[1],
+            "message_count": row[2],
+            "generated_at": row[3]
+        }
+    
+    conn.close()
+    return summaries
+
+def save_weekly_summary(user_id: str, week_key: str, week_start: str, 
+                       summary: str, days_count: int):
+    """Save or update a weekly summary"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        INSERT OR REPLACE INTO weekly_summaries 
+        (user_id, week_key, week_start, summary, days_count, generated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (
+        user_id,
+        week_key,
+        week_start,
+        summary,
+        days_count,
+        str(datetime.now())
+    ))
+    
+    conn.commit()
+    conn.close()
+    print(f"📅 Weekly summary saved for {user_id} - {week_key}")
+
+def get_weekly_summaries(user_id: str, limit: int = 12) -> Dict[str, Dict]:
+    """Get weekly summaries for a user (returns dict keyed by week_key)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT week_key, week_start, summary, days_count, generated_at
+        FROM weekly_summaries
+        WHERE user_id = ?
+        ORDER BY week_key DESC
+        LIMIT ?
+    """, (user_id, limit))
+    
+    summaries = {}
+    for row in cursor.fetchall():
+        summaries[row[0]] = {
+            "week_start": row[1],
+            "summary": row[2],
+            "days_count": row[3],
+            "generated_at": row[4]
+        }
+    
+    conn.close()
+    return summaries
+
+def save_monthly_summary(user_id: str, month_key: str, summary: str, weeks_count: int):
+    """Save or update a monthly summary"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        INSERT OR REPLACE INTO monthly_summaries 
+        (user_id, month_key, summary, weeks_count, generated_at)
+        VALUES (?, ?, ?, ?, ?)
+    """, (
+        user_id,
+        month_key,
+        summary,
+        weeks_count,
+        str(datetime.now())
+    ))
+    
+    conn.commit()
+    conn.close()
+    print(f"📆 Monthly summary saved for {user_id} - {month_key}")
+
+def get_monthly_summaries(user_id: str, limit: int = 12) -> Dict[str, Dict]:
+    """Get monthly summaries for a user (returns dict keyed by month_key)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT month_key, summary, weeks_count, generated_at
+        FROM monthly_summaries
+        WHERE user_id = ?
+        ORDER BY month_key DESC
+        LIMIT ?
+    """, (user_id, limit))
+    
+    summaries = {}
+    for row in cursor.fetchall():
+        summaries[row[0]] = {
+            "summary": row[1],
+            "weeks_count": row[2],
+            "generated_at": row[3]
+        }
+    
+    conn.close()
+    return summaries
+
+def load_all_summaries(user_id: str) -> Dict:
+    """Load all summaries for a user in the hierarchical structure"""
+    return {
+        "daily": get_daily_summaries(user_id),
+        "weekly": get_weekly_summaries(user_id),
+        "monthly": get_monthly_summaries(user_id)
+    }
+
+def delete_old_summaries(user_id: str, days: int = 90):
+    """Delete summaries older than specified days"""
+    from datetime import timedelta
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cutoff_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    
+    # Delete old daily summaries
+    cursor.execute("""
+        DELETE FROM daily_summaries
+        WHERE user_id = ? AND date < ?
+    """, (user_id, cutoff_date))
+    daily_deleted = cursor.rowcount
+    
+    # Delete old weekly summaries (keep more weeks)
+    cutoff_week = (datetime.now() - timedelta(days=days+30)).strftime("%Y-W%W")
+    cursor.execute("""
+        DELETE FROM weekly_summaries
+        WHERE user_id = ? AND week_key < ?
+    """, (user_id, cutoff_week))
+    weekly_deleted = cursor.rowcount
+    
+    # Keep all monthly summaries (they're already condensed)
+    
+    conn.commit()
+    conn.close()
+    
+    print(f"🧹 Deleted {daily_deleted} daily and {weekly_deleted} weekly summaries for {user_id}")
+    return {"daily": daily_deleted, "weekly": weekly_deleted}
+
 def delete_user_data(user_id: str):
-    """Delete all user data"""
+    """Delete all user data including summaries"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     cursor.execute("DELETE FROM mood_transitions WHERE user_id = ?", (user_id,))
     cursor.execute("DELETE FROM mood_entries WHERE user_id = ?", (user_id,))
+    cursor.execute("DELETE FROM daily_summaries WHERE user_id = ?", (user_id,))
+    cursor.execute("DELETE FROM weekly_summaries WHERE user_id = ?", (user_id,))
+    cursor.execute("DELETE FROM monthly_summaries WHERE user_id = ?", (user_id,))
     cursor.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
     
     conn.commit()

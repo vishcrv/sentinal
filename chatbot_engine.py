@@ -7,7 +7,7 @@ from openai import OpenAI
 import random
 import re
 from typing import Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 import config
 import database as db
 
@@ -144,6 +144,51 @@ Message to analyze: "{message}"
 
 Respond with ONLY the JSON object."""
 
+# ══════════════════════════════════════════════════════════════
+# SUMMARY GENERATION PROMPTS
+# ══════════════════════════════════════════════════════════════
+
+DAILY_SUMMARY_PROMPT = """Summarize this day's conversation between a friend (Alex) and the user. Focus on:
+- Key topics discussed
+- Emotional states (moods, intensity)
+- Important events or concerns mentioned
+- Any recurring themes
+
+Keep it concise (3-5 sentences max), like notes a friend would remember.
+
+Conversations from {date}:
+{messages}
+
+Return ONLY a brief summary:"""
+
+WEEKLY_SUMMARY_PROMPT = """Summarize this week's conversations into key themes and patterns. Synthesize from daily summaries:
+
+{daily_summaries}
+
+Focus on:
+- Overall mood trends
+- Major topics/concerns
+- Progress or changes noticed
+- Significant events
+
+Keep it concise (4-6 sentences), highlighting what matters most.
+
+Return ONLY the weekly summary:"""
+
+MONTHLY_SUMMARY_PROMPT = """Create a high-level monthly overview from weekly summaries:
+
+{weekly_summaries}
+
+Capture:
+- Main emotional patterns
+- Key life events or changes
+- Persistent themes or concerns
+- Overall trajectory
+
+Keep it brief (5-7 sentences), focusing on the big picture.
+
+Return ONLY the monthly summary:"""
+
 def detect_crisis(message: str) -> bool:
     """Detect if message contains crisis indicators"""
     message_lower = message.lower()
@@ -205,6 +250,217 @@ def make_human_like(text: str) -> str:
     
     return text.strip()
 
+# ══════════════════════════════════════════════════════════════
+# SUMMARY GENERATION FUNCTIONS
+# ══════════════════════════════════════════════════════════════
+
+def generate_daily_summary(messages: List[Dict], date: str) -> Optional[str]:
+    """Generate summary for a single day's conversations"""
+    if not messages:
+        return None
+    
+    # Format messages for summary
+    formatted_msgs = []
+    for msg in messages:
+        role = "Them" if msg["role"] == "user" else "Alex"
+        formatted_msgs.append(f"{role}: {msg['text']}")
+    
+    messages_text = "\n".join(formatted_msgs)
+    
+    try:
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that creates concise, natural summaries of conversations."},
+                {"role": "user", "content": DAILY_SUMMARY_PROMPT.format(date=date, messages=messages_text)}
+            ],
+            temperature=0.5,
+            max_tokens=200
+        )
+        
+        return response.choices[0].message.content.strip()
+        
+    except Exception as e:
+        print(f"⚠️ Daily summary generation error: {e}")
+        return None
+
+def generate_weekly_summary(daily_summaries: List[Dict]) -> Optional[str]:
+    """Generate summary from daily summaries for a week"""
+    if not daily_summaries:
+        return None
+    
+    # Format daily summaries
+    formatted = []
+    for ds in daily_summaries:
+        formatted.append(f"{ds['date']}: {ds['summary']}")
+    
+    summaries_text = "\n\n".join(formatted)
+    
+    try:
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that synthesizes weekly patterns from daily summaries."},
+                {"role": "user", "content": WEEKLY_SUMMARY_PROMPT.format(daily_summaries=summaries_text)}
+            ],
+            temperature=0.5,
+            max_tokens=250
+        )
+        
+        return response.choices[0].message.content.strip()
+        
+    except Exception as e:
+        print(f"⚠️ Weekly summary generation error: {e}")
+        return None
+
+def generate_monthly_summary(weekly_summaries: List[Dict]) -> Optional[str]:
+    """Generate summary from weekly summaries for a month"""
+    if not weekly_summaries:
+        return None
+    
+    # Format weekly summaries
+    formatted = []
+    for ws in weekly_summaries:
+        formatted.append(f"Week of {ws['week_start']}: {ws['summary']}")
+    
+    summaries_text = "\n\n".join(formatted)
+    
+    try:
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that creates high-level monthly overviews from weekly summaries."},
+                {"role": "user", "content": MONTHLY_SUMMARY_PROMPT.format(weekly_summaries=summaries_text)}
+            ],
+            temperature=0.5,
+            max_tokens=300
+        )
+        
+        return response.choices[0].message.content.strip()
+        
+    except Exception as e:
+        print(f"⚠️ Monthly summary generation error: {e}")
+        return None
+
+def get_or_create_summaries(user_data: Dict, user_id: str) -> Dict:
+    """Get existing summaries or create them if needed"""
+    history = user_data.get("history", [])
+    
+    # Initialize summary structure if not exists
+    if "summaries" not in user_data:
+        user_data["summaries"] = {
+            "daily": {},
+            "weekly": {},
+            "monthly": {}
+        }
+    
+    summaries = user_data["summaries"]
+    now = datetime.now()
+    
+    # Group messages by date
+    messages_by_date = {}
+    for msg in history:
+        if "timestamp" in msg:
+            # Parse timestamp and get date
+            try:
+                ts = datetime.fromisoformat(msg["timestamp"])
+                date_key = ts.strftime("%Y-%m-%d")
+                if date_key not in messages_by_date:
+                    messages_by_date[date_key] = []
+                messages_by_date[date_key].append(msg)
+            except:
+                continue
+    
+    # Generate daily summaries for dates that don't have them
+    for date_key, msgs in messages_by_date.items():
+        if date_key not in summaries["daily"] and len(msgs) >= 3:  # Only summarize if enough messages
+            daily_sum = generate_daily_summary(msgs, date_key)
+            if daily_sum:
+                summaries["daily"][date_key] = {
+                    "summary": daily_sum,
+                    "message_count": len(msgs),
+                    "generated_at": now.isoformat()
+                }
+    
+    # Generate weekly summaries (weeks with at least 2 days of conversations)
+    weeks = {}
+    for date_str in summaries["daily"].keys():
+        date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+        week_key = date_obj.strftime("%Y-W%W")  # Year-Week format
+        if week_key not in weeks:
+            weeks[week_key] = []
+        weeks[week_key].append({
+            "date": date_str,
+            "summary": summaries["daily"][date_str]["summary"]
+        })
+    
+    for week_key, daily_sums in weeks.items():
+        if week_key not in summaries["weekly"] and len(daily_sums) >= 2:
+            weekly_sum = generate_weekly_summary(daily_sums)
+            if weekly_sum:
+                summaries["weekly"][week_key] = {
+                    "summary": weekly_sum,
+                    "week_start": daily_sums[0]["date"],
+                    "days_count": len(daily_sums),
+                    "generated_at": now.isoformat()
+                }
+    
+    # Generate monthly summaries (months with at least 2 weeks)
+    months = {}
+    for week_key in summaries["weekly"].keys():
+        month_key = week_key[:7]  # Extract YYYY-MM
+        if month_key not in months:
+            months[month_key] = []
+        months[month_key].append({
+            "week_start": summaries["weekly"][week_key]["week_start"],
+            "summary": summaries["weekly"][week_key]["summary"]
+        })
+    
+    for month_key, weekly_sums in months.items():
+        if month_key not in summaries["monthly"] and len(weekly_sums) >= 2:
+            monthly_sum = generate_monthly_summary(weekly_sums)
+            if monthly_sum:
+                summaries["monthly"][month_key] = {
+                    "summary": monthly_sum,
+                    "weeks_count": len(weekly_sums),
+                    "generated_at": now.isoformat()
+                }
+    
+    return summaries
+
+def build_context_from_summaries(summaries: Dict, recent_history: List[Dict]) -> str:
+    """Build context string using hierarchical summaries + recent messages"""
+    context_parts = []
+    
+    # Add monthly summary (oldest, highest level)
+    if summaries.get("monthly"):
+        latest_month = max(summaries["monthly"].keys())
+        month_summary = summaries["monthly"][latest_month]["summary"]
+        context_parts.append(f"[Past Month Overview]: {month_summary}")
+    
+    # Add recent weekly summary (if different from current week)
+    if summaries.get("weekly"):
+        recent_weeks = sorted(summaries["weekly"].keys())[-2:]  # Last 2 weeks
+        for week in recent_weeks:
+            week_summary = summaries["weekly"][week]["summary"]
+            context_parts.append(f"[Recent Week]: {week_summary}")
+    
+    # Add yesterday's daily summary (if exists)
+    if summaries.get("daily"):
+        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        if yesterday in summaries["daily"]:
+            daily_summary = summaries["daily"][yesterday]["summary"]
+            context_parts.append(f"[Yesterday]: {daily_summary}")
+    
+    # Add recent conversation (last 5-8 messages)
+    if recent_history:
+        context_parts.append("\n[Current Conversation]:")
+        for msg in recent_history[-8:]:
+            role = "Them" if msg["role"] == "user" else "You"
+            context_parts.append(f"{role}: {msg['text']}")
+    
+    return "\n".join(context_parts)
+
 async def generate_support_response(user_data: Dict, user_message: str, user_id: str) -> Dict:
     """Generate authentic human friend response with continuous mood tracking"""
     
@@ -230,18 +486,17 @@ async def generate_support_response(user_data: Dict, user_message: str, user_id:
         if mood_detected:
             intensity = estimate_intensity(user_message)
     
-    # Build context from history
+    # Build context from history with summaries
     history = user_data.get("history", [])
-    max_msgs = getattr(config, "MAX_HISTORY_MESSAGES", 50)
-    recent_history = history[-max_msgs:] if len(history) > max_msgs else history
     
-    # Format conversation history
-    conversation_context = ""
-    if recent_history:
-        context_window = recent_history[-10:] if len(recent_history) > 10 else recent_history
-        for msg in context_window:
-            role = "Them" if msg["role"] == "user" else "You"
-            conversation_context += f"{role}: {msg['text']}\n"
+    # Get or generate summaries
+    summaries = get_or_create_summaries(user_data, user_id)
+    
+    # Build context using hierarchical summaries + recent messages
+    max_recent = 8  # Only keep last 8 messages in immediate context
+    recent_history = history[-max_recent:] if len(history) > max_recent else history
+    
+    conversation_context = build_context_from_summaries(summaries, recent_history)
     
     # Build user context
     total_messages = len(history)
@@ -286,8 +541,8 @@ Just chat like you would with any friend."""
 
 {guidance}
 
-RECENT CONVERSATION:
-{conversation_context if conversation_context else "They just started chatting with you"}
+CONVERSATION CONTEXT:
+{conversation_context}
 
 THEM: "{user_message}"
 
