@@ -1,5 +1,9 @@
+__pycache__
+dataset/
+.env
 **/.env
 __pycache__/
 **/model.bin
 **/todo.txt
 **/cred/
+**/test.py
