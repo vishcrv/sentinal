@@ -99,6 +99,23 @@ def init_db():
         )
     """)
     
+    # Calendar events table - NEW
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS calendar_events (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            google_event_id TEXT,
+            title TEXT NOT NULL,
+            description TEXT,
+            start_time TEXT NOT NULL,
+            end_time TEXT NOT NULL,
+            category TEXT,
+            source TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users (user_id)
+        )
+    """)
+    
     # Create indexes
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_user_mood 
@@ -123,6 +140,11 @@ def init_db():
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_monthly_summaries 
         ON monthly_summaries(user_id, month_key)
+    """)
+    
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_calendar_events 
+        ON calendar_events(user_id, start_time)
     """)
     
     conn.commit()
@@ -669,9 +691,98 @@ def delete_user_data(user_id: str):
     cursor.execute("DELETE FROM daily_summaries WHERE user_id = ?", (user_id,))
     cursor.execute("DELETE FROM weekly_summaries WHERE user_id = ?", (user_id,))
     cursor.execute("DELETE FROM monthly_summaries WHERE user_id = ?", (user_id,))
+    cursor.execute("DELETE FROM calendar_events WHERE user_id = ?", (user_id,))
     cursor.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
     
     conn.commit()
     conn.close()
     
     print(f"🗑️ Deleted all data for user {user_id}")
+
+# ══════════════════════════════════════════════════════════════
+# CALENDAR EVENTS FUNCTIONS
+# ══════════════════════════════════════════════════════════════
+
+def save_calendar_event(user_id: str, event_id: str, google_event_id: Optional[str],
+                        title: str, description: Optional[str], start_time: str, 
+                        end_time: str, category: Optional[str] = None, 
+                        source: Optional[str] = None):
+    """Save a calendar event to database"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        INSERT OR REPLACE INTO calendar_events 
+        (id, user_id, google_event_id, title, description, start_time, end_time, category, source, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        event_id,
+        user_id,
+        google_event_id,
+        title,
+        description,
+        start_time,
+        end_time,
+        category,
+        source,
+        str(datetime.now())
+    ))
+    
+    conn.commit()
+    conn.close()
+    print(f"📅 Calendar event saved: {title} for user {user_id}")
+
+def get_calendar_events(user_id: str, limit: int = 50, days_ahead: int = 30) -> List[Dict]:
+    """Get calendar events for a user"""
+    from datetime import timedelta
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Get events from now up to days_ahead
+    cutoff_time = datetime.now()
+    future_time = datetime.now() + timedelta(days=days_ahead)
+    
+    cursor.execute("""
+        SELECT id, google_event_id, title, description, start_time, end_time, category, source, created_at
+        FROM calendar_events
+        WHERE user_id = ? AND start_time >= ? AND start_time <= ?
+        ORDER BY start_time ASC
+        LIMIT ?
+    """, (user_id, str(cutoff_time), str(future_time), limit))
+    
+    events = []
+    for row in cursor.fetchall():
+        events.append({
+            "id": row[0],
+            "google_event_id": row[1],
+            "title": row[2],
+            "description": row[3],
+            "start_time": row[4],
+            "end_time": row[5],
+            "category": row[6],
+            "source": row[7],
+            "created_at": row[8]
+        })
+    
+    conn.close()
+    return events
+
+def delete_calendar_event(user_id: str, event_id: str):
+    """Delete a calendar event"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        DELETE FROM calendar_events
+        WHERE user_id = ? AND id = ?
+    """, (user_id, event_id))
+    
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    
+    if deleted > 0:
+        print(f"🗑️ Deleted calendar event {event_id} for user {user_id}")
+    
+    return deleted > 0
