@@ -69,7 +69,14 @@ def get_mood_history(user_id: str, days: int = 30) -> List[Dict]:
     filtered_entries = []
     
     for entry in entries:
-        entry_date = datetime.fromisoformat(entry["timestamp"])
+        ts = entry.get("timestamp")
+        if not ts:
+            continue
+        try:
+            entry_date = datetime.fromisoformat(ts)
+        except Exception:
+            # Skip entries with invalid timestamp formats
+            continue
         if entry_date >= cutoff_date:
             filtered_entries.append(entry)
     
