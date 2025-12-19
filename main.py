@@ -56,6 +56,7 @@ class MoodEntry(BaseModel):
     intensity: int
     notes: Optional[str] = None
     triggers: Optional[List[str]] = None
+    date: Optional[str] = None  # Date in YYYY-MM-DD format
 
 class MoodResponse(BaseModel):
     success: bool
@@ -183,7 +184,8 @@ async def log_mood(entry: MoodEntry):
             mood=entry.mood,
             intensity=entry.intensity,
             notes=entry.notes,
-            triggers=entry.triggers
+            triggers=entry.triggers,
+            entry_date=entry.date
         )
         
         insights = mood.get_mood_insights(entry.user_id)
@@ -209,6 +211,35 @@ async def get_mood_history(user_id: str, days: int = 30):
             "user_id": user_id,
             "history": history,
             "insights": insights
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/mood/date/{user_id}/{date}")
+async def get_mood_by_date(user_id: str, date: str):
+    """
+    Get mood entries for a specific date (YYYY-MM-DD format)
+    """
+    try:
+        entries = db.get_mood_entries_by_date(user_id, date)
+        return {
+            "user_id": user_id,
+            "date": date,
+            "entries": entries
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/mood/dates/{user_id}")
+async def get_mood_dates(user_id: str, days: int = 60):
+    """
+    Get list of dates that have mood entries (for calendar highlighting)
+    """
+    try:
+        dates = db.get_mood_entries_dates(user_id, days=days)
+        return {
+            "user_id": user_id,
+            "dates": dates
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

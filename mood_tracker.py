@@ -11,7 +11,8 @@ import database as db
 
 def log_mood_entry(user_id: str, mood: str, intensity: int,
                    notes: Optional[str] = None,
-                   triggers: Optional[List[str]] = None) -> str:
+                   triggers: Optional[List[str]] = None,
+                   entry_date: Optional[str] = None) -> str:
     """
     Log a mood entry for a user
     
@@ -21,11 +22,24 @@ def log_mood_entry(user_id: str, mood: str, intensity: int,
         intensity: Mood intensity from 1-10
         notes: Optional notes about the mood
         triggers: Optional list of triggers
+        entry_date: Optional date string (YYYY-MM-DD format). If not provided, uses current date/time
     
     Returns:
         entry_id: Unique identifier for the mood entry
     """
     entry_id = str(uuid.uuid4())
+    
+    # Parse entry_date if provided, otherwise use current datetime
+    if entry_date:
+        try:
+            # Parse date string and create datetime at noon
+            date_obj = datetime.strptime(entry_date, "%Y-%m-%d")
+            entry_timestamp = date_obj.replace(hour=12, minute=0, second=0, microsecond=0)
+        except ValueError:
+            # If parsing fails, use current datetime
+            entry_timestamp = datetime.now()
+    else:
+        entry_timestamp = datetime.now()
     
     # Save to database
     db.save_mood_entry(
@@ -34,7 +48,8 @@ def log_mood_entry(user_id: str, mood: str, intensity: int,
         mood=mood,
         intensity=intensity,
         notes=notes,
-        triggers=triggers
+        triggers=triggers,
+        timestamp=entry_timestamp
     )
     
     # Update user data
@@ -43,12 +58,12 @@ def log_mood_entry(user_id: str, mood: str, intensity: int,
         "id": entry_id,
         "mood": mood,
         "intensity": intensity,
-        "timestamp": str(datetime.now())
+        "timestamp": str(entry_timestamp)
     })
     user_data["stats"]["total_mood_logs"] = len(user_data["mood_entries"])
     db.save_user_data(user_id, user_data)
     
-    print(f"📊 Mood logged: {mood} ({intensity}/10) for user {user_id}")
+    print(f"📊 Mood logged: {mood} ({intensity}/10) for user {user_id} on {entry_timestamp.strftime('%Y-%m-%d')}")
     return entry_id
 
 def get_mood_history(user_id: str, days: int = 30) -> List[Dict]:

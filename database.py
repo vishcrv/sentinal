@@ -213,10 +213,14 @@ def get_all_users() -> List[str]:
     return users
 
 def save_mood_entry(user_id: str, entry_id: str, mood: str, intensity: int,
-                   notes: Optional[str] = None, triggers: Optional[List[str]] = None):
+                   notes: Optional[str] = None, triggers: Optional[List[str]] = None,
+                   timestamp: Optional[datetime] = None):
     """Save a mood entry"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+    
+    if timestamp is None:
+        timestamp = datetime.now()
     
     cursor.execute("""
         INSERT INTO mood_entries (id, user_id, mood, intensity, notes, triggers, timestamp)
@@ -228,7 +232,7 @@ def save_mood_entry(user_id: str, entry_id: str, mood: str, intensity: int,
         intensity,
         notes,
         json.dumps(triggers) if triggers else None,
-        str(datetime.now())
+        str(timestamp)
     ))
     
     conn.commit()
@@ -260,6 +264,90 @@ def get_mood_entries(user_id: str, limit: int = 100) -> List[Dict]:
     
     conn.close()
     return entries
+
+def get_mood_entries_by_date(user_id: str, date: str) -> List[Dict]:
+    """
+    Get mood entries for a user on a specific date
+    
+    Args:
+        user_id: User identifier
+        date: Date string in YYYY-MM-DD format
+    
+    Returns:
+        List of mood entries for that date
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Query for entries on the specified date (any time during that day)
+    # Use LIKE to match any timestamp that starts with the date
+    date_pattern = f"{date}%"
+    
+    cursor.execute("""
+        SELECT id, mood, intensity, notes, triggers, timestamp
+        FROM mood_entries
+        WHERE user_id = ? AND timestamp LIKE ?
+        ORDER BY timestamp DESC
+    """, (user_id, date_pattern))
+    
+    entries = []
+    for row in cursor.fetchall():
+        entries.append({
+            "id": row[0],
+            "mood": row[1],
+            "intensity": row[2],
+            "notes": row[3],
+            "triggers": json.loads(row[4]) if row[4] else None,
+            "timestamp": row[5]
+        })
+    
+    conn.close()
+    return entries
+
+def get_mood_entries_dates(user_id: str, days: int = 60) -> List[str]:
+    """
+    Get list of dates that have mood entries (for calendar highlighting)
+    
+    Args:
+        user_id: User identifier
+        days: Number of days to look back
+    
+    Returns:
+        List of date strings in YYYY-MM-DD format
+    """
+    from datetime import timedelta
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cutoff_date = datetime.now() - timedelta(days=days)
+    cutoff_str = str(cutoff_date)
+    
+    # Get all entries and extract dates
+    cursor.execute("""
+        SELECT timestamp
+        FROM mood_entries
+        WHERE user_id = ? AND timestamp >= ?
+        ORDER BY timestamp DESC
+    """, (user_id, cutoff_str))
+    
+    dates_set = set()
+    for row in cursor.fetchall():
+        timestamp_str = row[0]
+        try:
+            # Parse timestamp and extract date part
+            if isinstance(timestamp_str, str):
+                # Extract YYYY-MM-DD from timestamp string
+                date_part = timestamp_str.split()[0] if ' ' in timestamp_str else timestamp_str[:10]
+                if len(date_part) >= 10:
+                    dates_set.add(date_part[:10])  # Ensure YYYY-MM-DD format
+        except Exception:
+            continue
+    
+    dates = sorted(list(dates_set), reverse=True)
+    
+    conn.close()
+    return dates
 
 def log_mood_transition(user_id: str, mood: str, intensity: int, 
                        message: Optional[str] = None, context: Optional[str] = None):
