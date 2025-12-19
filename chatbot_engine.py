@@ -320,19 +320,65 @@ def analyze_mood_with_llm(message: str) -> Optional[Dict]:
     try:
         print(123)
         print(message)
-        MOOD_ANALYSIS_PROMPT = f"""Analyze the emotional state from this conversation message.
+        MOOD_ANALYSIS_PROMPT = f"""You are an emotion analysis AI. Analyze the emotional state from the message below.
 
-Return ONLY a JSON object with this exact format (no markdown, no extra text):
-{{
-            "mood": "one of: happy, sad, anxious, depressed, angry, calm, stressed, neutral",
-  "intensity": 5,
-  "confidence": 0.8,
-  "notes": "brief reason for this assessment"
-}}
+MOOD SELECTION GUIDELINES WITH EXAMPLES:
+
+- "depressed": Deep sadness, hopelessness, loss of interest, feeling worthless
+  Examples: "I don't see the point anymore", "Nothing matters", "I feel empty inside"
+
+- "anxious": Worry, fear about future, nervousness, panic, overthinking
+  Examples: "What if it goes wrong?", "I can't stop worrying", "I'm so nervous about this"
+
+- "stressed": Overwhelmed, under pressure, struggling to cope, crisis situations
+  Examples: "I want to kill myself", "I can't handle this anymore", "Everything is too much", "I'm drowning in work"
+
+- "angry": Frustration, irritation, rage, feeling wronged or hostile
+  Examples: "I hate this!", "This is so unfair!", "They make me furious"
+
+- "sad": General unhappiness, disappointment, grief, feeling down (but not hopeless)
+  Examples: "I'm feeling really down today", "That made me cry", "I miss them"
+
+- "happy": Joy, contentment, excitement, positive emotions
+  Examples: "I'm so excited!", "This made my day!", "Feeling great today!"
+
+- "calm": Peaceful, relaxed, content, balanced emotional state
+  Examples: "Feeling at peace", "Just taking it easy", "Everything feels balanced"
+
+- "neutral": No strong emotions, matter-of-fact, informational
+  Examples: "What's the weather?", "Can you help me with this code?", "I need information about..."
+
+IMPORTANT: Suicidal ideation or self-harm mentions should map to "stressed" (crisis/overwhelmed state) rather than depressed, as it indicates acute distress.
+
+Evaluate these factors:
+1. Explicit emotion words and phrases
+2. Crisis indicators (self-harm, suicide mentions, extreme language)
+3. Tone markers (exclamation marks, caps, emoji)
+4. Context and subject matter
+5. Sentence structure and urgency
+
+Intensity scale (1-10):
+- 1-2: Very mild, barely noticeable emotional undertones
+- 3-4: Moderate, noticeable but controlled emotion
+- 5-6: Clear emotional state, evident in expression
+- 7-8: Strong emotion, emphatic language, clear distress/excitement
+- 9-10: Extreme/crisis emotion, overwhelming tone, urgent intervention may be needed
+
+Confidence scale (0.0-1.0):
+- 0.9-1.0: Explicit emotion words or crisis language present
+- 0.7-0.8: Strong contextual clues and clear tone
+- 0.5-0.6: Some indicators but message is somewhat ambiguous
+- 0.3-0.4: Minimal emotional content, mostly inference
 
 Message to analyze: {message}
 
-Respond with ONLY the JSON object."""
+Return ONLY a valid JSON object (no markdown code blocks, no extra text):
+{{
+  "mood": "one of: happy, sad, anxious, depressed, angry, calm, stressed, neutral",
+  "intensity": <number 1-10>,
+  "confidence": <number 0.0-1.0>,
+  "notes": "brief explanation covering: identified mood, why this intensity level, and key textual indicators"
+}}"""
         print(MOOD_ANALYSIS_PROMPT)
         response = client.chat.completions.create(
             model=MODEL,
